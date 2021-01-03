@@ -27,24 +27,28 @@ workbox.core.clientsClaim();
  */
 self.__precacheManifest = [
   {
-    "url": "webpack-runtime-418031af1aea8950e574.js"
+    "url": "webpack-runtime-1225f66443f276ced480.js"
   },
   {
-    "url": "commons-3ea5e0a4f1473ce10d59.js"
+    "url": "commons-8d09560bc2da5fd372b6.js"
   },
   {
-    "url": "app-24a7dfb93aa5a39aeee6.js"
+    "url": "app-73f4a9f590569dca0952.js"
   },
   {
-    "url": "component---node-modules-gatsby-plugin-offline-app-shell-js-a51eb61f12114747b43d.js"
+    "url": "component---node-modules-gatsby-plugin-offline-app-shell-js-b17902771480fe22aae4.js"
   },
   {
     "url": "offline-plugin-app-shell-fallback/index.html",
-    "revision": "79ed8dc74829817b0666adc4ac5219aa"
+    "revision": "a16cb67f5071e5a179242fe7493d34b3"
+  },
+  {
+    "url": "page-data/offline-plugin-app-shell-fallback/page-data.json",
+    "revision": "d2e23077a4e4cb9639d2b0e5acf2105f"
   },
   {
     "url": "manifest.webmanifest",
-    "revision": "b1c8e7aa953af70641c99dce691b1919"
+    "revision": "53202cdabc05a62c34e592d6e39f5e0f"
   }
 ].concat(self.__precacheManifest || []);
 workbox.precaching.precacheAndRoute(self.__precacheManifest, {});
@@ -59,9 +63,38 @@ workbox.routing.registerRoute(/^https?:\/\/fonts\.googleapis\.com\/css/, new wor
 importScripts(`idb-keyval-iife.min.js`)
 
 const { NavigationRoute } = workbox.routing
-
-let lastNavigationRequest = null
 let offlineShellEnabled = true
+
+const navigationRoute = new NavigationRoute(async ({ event }) => {
+  if (!offlineShellEnabled) {
+    return await fetch(event.request)
+  }
+
+  let { pathname } = new URL(event.request.url)
+  pathname = pathname.replace(new RegExp(`^`), ``)
+
+  // Check for resources + the app bundle
+  // The latter may not exist if the SW is updating to a new version
+  const resources = await idbKeyval.get(`resources:${pathname}`)
+  if (!resources || !(await caches.match(`/app-73f4a9f590569dca0952.js`))) {
+    return await fetch(event.request)
+  }
+
+  for (const resource of resources) {
+    // As soon as we detect a failed resource, fetch the entire page from
+    // network - that way we won't risk being in an inconsistent state with
+    // some parts of the page failing.
+    if (!(await caches.match(resource))) {
+      return await fetch(event.request)
+    }
+  }
+
+  const offlineShell = `/offline-plugin-app-shell-fallback/index.html`
+  const offlineShellWithKey = workbox.precaching.getCacheKeyForURL(offlineShell)
+  return await caches.match(offlineShellWithKey)
+})
+
+workbox.routing.registerRoute(navigationRoute)
 
 // prefer standard object syntax to support more browsers
 const MessageAPI = {
@@ -87,75 +120,11 @@ self.addEventListener(`message`, event => {
   if (api) MessageAPI[api](event, event.data)
 })
 
-function handleAPIRequest({ event }) {
+workbox.routing.registerRoute(/\/.gatsby-plugin-offline:.+/, ({ event }) => {
   const { pathname } = new URL(event.request.url)
 
-  const params = pathname.match(/:(.+)/)[1]
-  const data = {}
+  const api = pathname.match(/:(.+)/)[1]
+  MessageAPI[api]()
 
-  if (params.indexOf(`=`) !== -1) {
-    params.split(`&`).forEach(param => {
-      const [key, val] = param.split(`=`)
-      data[key] = val
-    })
-  } else {
-    data.api = params
-  }
-
-  if (MessageAPI[data.api] !== undefined) {
-    MessageAPI[data.api]()
-  }
-
-  if (!data.redirect) {
-    return new Response()
-  }
-
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: lastNavigationRequest,
-    },
-  })
-}
-
-const navigationRoute = new NavigationRoute(async ({ event }) => {
-  // handle API requests separately to normal navigation requests, so do this
-  // check first
-  if (event.request.url.match(/\/.gatsby-plugin-offline:.+/)) {
-    return handleAPIRequest({ event })
-  }
-
-  if (!offlineShellEnabled) {
-    return await fetch(event.request)
-  }
-
-  lastNavigationRequest = event.request.url
-
-  let { pathname } = new URL(event.request.url)
-  pathname = pathname.replace(new RegExp(`^`), ``)
-
-  // Check for resources + the app bundle
-  // The latter may not exist if the SW is updating to a new version
-  const resources = await idbKeyval.get(`resources:${pathname}`)
-  if (!resources || !(await caches.match(`/app-24a7dfb93aa5a39aeee6.js`))) {
-    return await fetch(event.request)
-  }
-
-  for (const resource of resources) {
-    // As soon as we detect a failed resource, fetch the entire page from
-    // network - that way we won't risk being in an inconsistent state with
-    // some parts of the page failing.
-    if (!(await caches.match(resource))) {
-      return await fetch(event.request)
-    }
-  }
-
-  const offlineShell = `/offline-plugin-app-shell-fallback/index.html`
-  const offlineShellWithKey = workbox.precaching.getCacheKeyForURL(offlineShell)
-  return await caches.match(offlineShellWithKey)
+  return new Response()
 })
-
-workbox.routing.registerRoute(navigationRoute)
-
-// this route is used when performing a non-navigation request (e.g. fetch)
-workbox.routing.registerRoute(/\/.gatsby-plugin-offline:.+/, handleAPIRequest)
